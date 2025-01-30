@@ -9,10 +9,15 @@ from typing import Tuple, Optional
 from telegram import Bot, Update
 from telegram.error import Forbidden, NetworkError
 
+import json
+
+with open('config.json') as f:
+    config = json.load(f)
+
 # Constants
-TELEGRAM_TOKEN = '7619232693:AAHbWMdK-dI7qoLcse7rZBpswpT-LbhFFcI'
-SPREADSHEET_ID = '174hcUZViEmj-d33mh655C-xig6KZQTZOA_e9vf4t3yw'
-CREDENTIALS_FILE = 'telegrambot-447103-ecb491824734.json'
+TELEGRAM_TOKEN = config['telegram_token']
+SPREADSHEET_ID = config['spreadsheet_id']
+CREDENTIALS_FILE = config['credentials_file']
 SHEET_NAME = "Expenses"  # Name of your worksheet
 
 # Google Sheets setup
