@@ -34,43 +34,92 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+def is_date(text, fmt="%d/%m"):
+    try:
+        datetime.strptime(text, fmt)
+        return True
+    except ValueError:
+        return False
+
+def normalize_date(date_str: str) -> str:
+    current_date = datetime.now()
+    default_iso = current_date.strftime("%Y-%m-%d")
+    try:
+        # Already in correct format validation
+        parsed = datetime.strptime(date_str, "%Y-%m-%d")
+        return date_str
+    except ValueError:
+        pass
+
+    try:
+        # Handle day/month format (e.g., "12/2" → 12 February)
+        day, month = map(int, date_str.split('/', 1))
+        normalized = current_date.replace(month=month, day=day)
+        return normalized.strftime("%Y-%m-%d")
+    except (ValueError, TypeError, AttributeError):
+        return default_iso  # Fallback to current date
+    
 def process_message(text: str) -> Tuple[list[Tuple[float, str, str]], list[str]]:
     """
-    Parses newline-separated expense messages in the format:
-    "15.50 coffee latte
-    20 food lunch
-    5 transport bus"
+    Parses two input formats:
+    1. With date: "DD/MM AMOUNT CATEGORY DESCRIPTION" (e.g., "12/2 10440 medicine vitamin D")
+    2. Without date: "AMOUNT CATEGORY DESCRIPTION" (e.g., "10440 medicine vitamin D")
     """
     valid_entries = []
     errors = []
 
-    # Split into individual entries by newline
     entries = [e.strip() for e in text.split('\n') if e.strip()]
     
     for idx, entry in enumerate(entries, 1):
-        parts = entry.split(maxsplit=2)
-        if len(parts) < 3:
-            errors.append(f"❌ Line {idx}: '{entry}' - Needs 3 components (amount, category, description)")
-            continue
+        parts = entry.split()
         
+        if not parts:
+            errors.append(f"❌ Line {idx}: Empty entry")
+            continue
+
         try:
-            amount = float(parts[0])
-            category = parts[1]
-            description = parts[2] if len(parts) > 2 else ""
-            valid_entries.append((amount, category, description))
-        except ValueError:
-            errors.append(f"❌ Line {idx}: Invalid amount '{parts[0]}'")
+            # Case 1: Entry starts with a date (XX/XX format)
+            if is_date(parts[0]):
+                if len(parts) < 4:
+                    errors.append(f"❌ Line {idx}: Date format requires 4 components (DATE AMOUNT CATEGORY DESCRIPTION)")
+                    continue
+                
+                date_str = normalize_date(parts[0])
+                amount = float(parts[1])
+                category = parts[2]
+                description = ' '.join(parts[3:])  # Handle multi-word descriptions
+                valid_entries.append((date_str, amount, category, description))
+                
+            # Case 2: Default format without date
+            else:
+                if len(parts) < 3:
+                    errors.append(f"❌ Line {idx}: Needs 3 components (AMOUNT CATEGORY DESCRIPTION)")
+                    continue
+                
+                amount = float(parts[0])
+                category = parts[1]
+                description = ' '.join(parts[2:])  # Handle multi-word descriptions
+                valid_entries.append((amount, category, description))
+                
+        except ValueError as e:
+            errors.append(f"❌ Line {idx}: Invalid numeric format '{parts[0]}'")
+        except Exception as e:
+            errors.append(f"❌ Line {idx}: Unexpected error - {str(e)}")
 
     return valid_entries, errors
 
+
 def append_to_sheet(data: list[Tuple[float, str, str]]) -> int:
     """Appends multiple expense records to Google Sheet"""
-    date_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_time = datetime.now().strftime("%Y-%m-%d")
     
     values = [
-        [date_time, amount, category, description]
-        for amount, category, description in data
-    ]
+      # For 4-component tuples (existing_date, amount, category, description)
+      [item[0], item[1], item[2], item[3]] if len(item) == 4 
+      # For 3-component tuples (amount, category, description)
+      else [date_time, item[0], item[1], item[2]] 
+      for item in data
+  ]
     
     body = {"values": values}
     
@@ -97,10 +146,15 @@ async def handle_message(bot: Bot, message: str, chat_id: int) -> None:
         if entries:
             rows_added = await asyncio.to_thread(append_to_sheet, entries)
             response.append(f"✅ Successfully added {rows_added} expense(s):")
-            response.extend([
-                f"• {amount} {category}: {desc}"
-                for amount, category, desc in entries
-            ])
+            
+            # Fixed unpacking logic for both formats
+            for entry in entries:
+                if len(entry) == 4:
+                    date_str, amount, category, description = entry
+                    response.append(f"• [{date_str}] {amount:.2f} {category}: {description}")
+                else:
+                    amount, category, description = entry
+                    response.append(f"• {amount:.2f} {category}: {description}")
         
         if errors:
             response.append("\n⚠️ Errors:")
